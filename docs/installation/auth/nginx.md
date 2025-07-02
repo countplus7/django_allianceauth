@@ -1,0 +1,113 @@
+# NGINX
+
+## Overview
+
+Nginx (engine x) is a HTTP server known for its high performance, stability, simple configuration, and low resource consumption. Unlike traditional servers (i.e. Apache), Nginx doesn't rely on threads to serve requests, rather using an asynchronous event driven approach which permits predictable resource usage and performance under load.
+
+If you're trying to cram Alliance Auth into a very small VPS of say, 1-2GB or less, then Nginx will be considerably friendlier to your resources compared to Apache.
+
+You can read more about NGINX on the [NGINX wiki](https://www.nginx.com/resources/wiki/).
+
+## Coming from Apache
+
+If you're converting from Apache, here are some things to consider.
+
+Nginx is lightweight for a reason. It doesn't try to do everything internally and instead concentrates on just being a good HTTP server. This means that, unlike Apache, it won't automatically run PHP scripts via mod_php and doesn't have an internal WSGI server like mod_wsgi. That doesn't mean that it can't, just that it relies on external processes to run these instead. This might be good or bad depending on your outlook. It's good because it allows you to segment your applications, restarting Alliance Auth wont impact your PHP applications. On the other hand it means more config and more management of services. For some people it will be worth it, for others losing the centralised nature of Apache may not be worth it.
+
+```eval_rst
++-----------+----------------------------------------+
+| Apache    | Nginx Replacement                      | 
++===========+========================================+
+| mod_php   | php5-fpm or php7-fpm (PHP FastCGI)     | 
++-----------+----------------------------------------+
+| mod_wsgi  | Gunicorn or other external WSGI server |
++-----------+----------------------------------------+
+
+```
+
+Your .htaccess files won't work. Nginx has a separate way of managing access to folders via the server config. Everything you can do with htaccess files you can do with Nginx config. [Read more on the Nginx wiki](https://www.nginx.com/resources/wiki/start/topics/examples/likeapache-htaccess/)
+
+## Setting up Nginx
+
+Install Nginx via your preferred package manager or other method. If you need help just search, there are plenty of guides on installing Nginx out there.
+
+Nginx needs to be able to read the folder containing your auth project's static files. `chown -R nginx:nginx /var/www/myauth/static`.
+
+```eval_rst
+.. tip::
+   Some specific distros may use www-data:www-data instead of nginx:nginx, causing static files (images, stylesheets etc) not to appear. You can confirm what user Nginx will run under by checking either its base config file `/etc/nginx/nginx.conf` for the "user" setting, or once Nginx has started `ps aux | grep nginx`.
+   Adjust your chown commands to the correct user if needed.
+..
+```
+
+You will need to have [Gunicorn](gunicorn.md) or some other WSGI server setup for hosting Alliance Auth.
+
+### Ubuntu
+Create a config file in `/etc/nginx/sites-available` and call it `alliance-auth.conf` or whatever your preferred name is.
+
+Create a symbolic link to enable the site `ln -s /etc/nginx/sites-available/alliance-auth.conf /etc/nginx/sites-enabled/`
+
+### CentOS
+
+Create a config file in `/etc/nginx/conf.d` and call it `alliance-auth.conf` or whatever your preferred name is.
+
+
+### Basic config
+
+Copy this basic config into your config file. Make whatever changes you feel are necessary.
+
+
+```
+server {
+    listen 80;
+    server_name example.com;
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+
+    location /static {
+        alias /var/www/myauth/static;
+        autoindex off;
+    }
+
+    # Gunicorn config goes below
+    location / {
+        include proxy_params;
+        proxy_pass http://127.0.0.1:8000;
+    }
+}
+```
+
+Restart Nginx after making changes to the config files. On Ubuntu `service nginx restart` and on CentOS `systemctl restart nginx.service`.
+
+#### Adding TLS/SSL
+
+With [Let's Encrypt](https://letsencrypt.org/) offering free SSL certificates, there's no good reason to not run HTTPS anymore. The bot can automatically configure Nginx on some operating systems. If not proceed with the manual steps below.
+
+Your config will need a few additions once you've got your certificate.
+
+```
+    listen 443 ssl http2; # Replace listen 80; with this
+
+    ssl_certificate           /path/to/your/cert.crt;
+    ssl_certificate_key       /path/to/your/cert.key;
+
+    ssl on;
+    ssl_session_cache  builtin:1000  shared:SSL:10m;
+    ssl_protocols  TLSv1 TLSv1.1 TLSv1.2;
+    ssl_ciphers EECDH+ECDSA+AESGCM:EECDH+aRSA+AESGCM:EECDH+ECDSA+SHA384:EECDH+ECDSA+SHA256:EECDH+aRSA+SHA384:EECDH+aRSA+SHA256:EECDH+aRSA+RC4:EECDH:EDH+aRSA:RC4:!aNULL:!eNULL:!LOW:!3DES:!MD5:!EXP:!PSK:!SRP:!DSS;
+    ssl_prefer_server_ciphers on;
+```
+
+If you want to redirect all your non-SSL visitors to your secure site, below your main configs `server` block, add the following:
+
+```
+server {
+    listen 80;
+    server_name example.com;
+
+    # Redirect all HTTP requests to HTTPS with a 301 Moved Permanently response.
+    return 301 https://$host$request_uri;
+}
+```
+
+If you have trouble with the `ssl_ciphers` listed here or some other part of the SSL config, try getting the values from [Mozilla's SSL Config Generator](https://mozilla.github.io/server-side-tls/ssl-config-generator/).
